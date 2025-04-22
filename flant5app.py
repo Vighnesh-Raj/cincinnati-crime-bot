@@ -8,31 +8,29 @@ from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
 import os
 
-# === Setup ===
+# === ENV SETUP ===
+HF_TOKEN = os.getenv("HF_TOKEN")
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
-# === HF TOKEN from Streamlit Secrets ===
-HF_TOKEN = os.getenv("HF_TOKEN")
-
-# === Cache the model for reuse after cold start ===
-@st.cache_resource(show_spinner="PLease wait while we load the FLAN-T5-Large model...")
-def load_summarizer():
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large", use_auth_token=HF_TOKEN)
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large", use_auth_token=HF_TOKEN)
+# === Load FLAN-T5-Large with cache ===
+@st.cache_resource(show_spinner="🔄 Loading FLAN-T5-Large (this may take a minute)...")
+def load_model():
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large", token=HF_TOKEN)
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large", token=HF_TOKEN)
     return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
-summarizer = load_summarizer()
+summarizer = load_model()
 
 # === Load & Clean Dataset ===
-@st.cache_data(show_spinner="Loading Cincinnati police data...")
+@st.cache_data(show_spinner="📂 Fetching latest police reports...")
 def load_data():
     path = hf_hub_download(
         repo_id="mlsystemsg1/cincinnati-crime-data",
         repo_type="dataset",
         filename="calls_for_service_latest.csv",
-        use_auth_token=HF_TOKEN
+        token=HF_TOKEN
     )
     df = pd.read_csv(path, low_memory=False)
     df['incident_type_desc'] = df['incident_type_desc'].fillna(df['incident_type_id'])
@@ -135,7 +133,6 @@ Out of {len(valid_rows) + len(ignored_rows)} total incidents, {len(ignored_rows)
 {context}
 Summarize what happened in a helpful and human-friendly paragraph:
 """
-
     return summarizer(prompt, max_length=300, truncation=True)[0]['generated_text']
 
 # === UI ===
