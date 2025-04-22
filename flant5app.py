@@ -1,17 +1,20 @@
 # === STREAMLIT VERSION: CINCINNATI CRIME CHATBOT ===
 import pandas as pd
 import time
-import mlflow
 import re
 from collections import Counter
 import streamlit as st
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
 
-# === Setup ===
+# === Streamlit UI Setup ===
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
+
+# === Initialize Session State ===
+if "preset" not in st.session_state:
+    st.session_state["preset"] = ""
 
 # === Load FLAN-T5-Base Model ===
 print("📦 Loading FLAN-T5-Base...")
@@ -107,6 +110,7 @@ def generate_answer(question, df):
 
     if not valid_rows:
         return f"⚠️ All {len(ignored_rows)} matched incidents were cancelled or administrative."
+
     if len(valid_rows) == 1:
         row = valid_rows[0]
         return f"Only one valid incident was found:\n\n📅 {row['create_time_incident'].strftime('%b %d, %Y')}\n📍 {clean_text(row.get('neighborhood'))}\n📝 {clean_text(row.get('incident_type_desc'))}\n🔚 {clean_text(row.get('disposition_text'))}\n🚨 Priority: {row.get('priority', 'N/A')}"
@@ -121,11 +125,17 @@ def generate_answer(question, df):
     incident_summary = ", ".join(f"{c} {t.lower() + ('s' if c > 1 else '')}" for t, c in incident_type_counts.items())
 
     prompt = f"""
-Citizen asked: \"{question}\"
-Out of {len(valid_rows) + len(ignored_rows)} total incidents, {len(ignored_rows)} were excluded. The remaining {len(valid_rows)} included: {incident_summary}.
+You are a helpful assistant summarizing police calls in Cincinnati.
+
+Citizen asked: "{question}"
+
+Out of {len(valid_rows) + len(ignored_rows)} total incidents, {len(ignored_rows)} were excluded for being administrative or cancelled. The remaining {len(valid_rows)} included: {incident_summary}.
+
+Incidents:
 {context}
-Summarize what happened in a helpful and human-friendly paragraph:
-"""
+
+Summary:
+""".strip()
 
     return summarizer(prompt, max_length=300, truncation=True)[0]['generated_text']
 
@@ -144,9 +154,9 @@ for i, q in enumerate(sample_questions):
     if cols[i].button(q):
         st.session_state["preset"] = q
 
-question = st.text_input("Ask a question:", value=st.session_state.get("preset", ""))
-
-if st.button("Submit"):
+# === Input & Display ===
+question = st.text_input("Ask a question:", value=st.session_state["preset"])
+if st.button("Submit") or question:
     with st.spinner("🧠 Bot is thinking..."):
         response = generate_answer(question, df_crime)
         st.markdown("---")
