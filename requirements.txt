@@ -1,10 +1,10 @@
 streamlit
 pandas
-transformers==4.51.3
+transformers
 huggingface-hub[hf_xet]
 sodapy
 mlflow
-torch==2.2.1
+torch
 scikit-learn
 regex
-numpy==1.26.4
+numpy
