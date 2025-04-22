@@ -17,8 +17,8 @@ st.markdown("Ask about recent police activity in your neighborhood.")
 # === Load FLAN-T5-Large with cache ===
 @st.cache_resource(show_spinner="🔄 Loading FLAN-T5-Large (this may take a minute)...")
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large", token=HF_TOKEN)
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large", token=HF_TOKEN)
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
     return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
 summarizer = load_model()
