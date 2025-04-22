@@ -13,14 +13,11 @@ st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
-# === Load FLAN-T5 ===
-@st.cache_resource(show_spinner="Loading FLAN-T5-Large model...")
-def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
-    return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-
-summarizer = load_model()
+# === Load FLAN-T5-Base Model ===
+print("📦 Loading FLAN-T5-Base...")
+tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
+model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
+summarizer = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
 # === Load & Clean Dataset ===
 @st.cache_data(show_spinner="Fetching latest police reports...")
