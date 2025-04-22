@@ -4,7 +4,7 @@ import re
 import mlflow
 import streamlit as st
 from collections import Counter
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
 
 # === App Setup ===
@@ -12,25 +12,20 @@ st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
-# === ML FLOW ===
+# === MLflow Setup ===
 mlflow.set_tracking_uri("http://3.145.180.106:5000")
 mlflow.set_experiment("Cincinnati Crime Chatbot")
 
-
-# === Load FLAN-T5-Base Model with error handling ===
+# === Load FLAN-T5-Base Model ===
 HF_TOKEN = st.secrets["HF_TOKEN"]
 
-@st.cache_resource(show_spinner="Loading FLAN-T5-Base model. This may take up to a minute.")
+@st.cache_resource
 def load_model():
-    try:
-        tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
-        model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
-        return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-    except Exception as e:
-        st.error(f"🚨 Error loading model: {e}")
-        raise e
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
+    return tokenizer, model
 
-summarizer = load_model()
+tokenizer, model = load_model()
 
 # === Load & Clean Dataset ===
 @st.cache_data(show_spinner="Fetching latest police reports...")
@@ -106,6 +101,7 @@ def get_relevant_rows(question, df):
 
     return filtered.sort_values("create_time_incident", ascending=False).head(25)
 
+# === Inference Function ===
 def answer_with_llm(question, df, model):
     valid_rows = []
     ignored_rows = []
@@ -135,12 +131,16 @@ Citizen asked: \"{question}\"
 Out of {len(valid_rows) + len(ignored_rows)} total incidents, {len(ignored_rows)} were excluded. The remaining {len(valid_rows)} included: {incident_summary}.
 {context}
 Summarize what happened in a helpful and human-friendly paragraph:
-"""
+""".strip()
 
     with mlflow.start_run() as run:
         mlflow.log_param("question", question)
         mlflow.log_metric("num_valid_incidents", len(valid_rows))
-        response = model(prompt, max_length=300, truncation=True)[0]['generated_text']
+
+        input_ids = tokenizer(prompt, return_tensors="pt", truncation=True).input_ids
+        output = model.generate(input_ids, max_length=300)
+        response = tokenizer.decode(output[0], skip_special_tokens=True)
+
         mlflow.log_text(response, "summary.txt")
         return response, run.info.run_id
 
@@ -153,7 +153,7 @@ if question:
         with st.expander("🔍 Filtered Data Preview"):
             st.dataframe(filtered[['create_time_incident', 'incident_type_id', 'cpd_neighborhood', 'priority']].head(10))
 
-        response, run_id = answer_with_llm(question, filtered, summarizer)
+        response, run_id = answer_with_llm(question, filtered, model)
         st.success("Done!")
         st.markdown("### 🤖 Response:")
         st.write(response)
