@@ -1,7 +1,9 @@
 streamlit
 pandas
+transformers
+huggingface_hub
+hf-xet
 sodapy
 mlflow
-transformers
-huggingface_hub[hf_xet]
-torch==2.2.2
+torch==2.2.1
+numpy<2.0
