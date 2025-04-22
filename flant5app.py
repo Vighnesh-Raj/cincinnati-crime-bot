@@ -1,36 +1,44 @@
 # === STREAMLIT: CINCINNATI CRIME CHATBOT ===
 import pandas as pd
-import time
 import re
+import mlflow
 import streamlit as st
 from collections import Counter
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
-import os
 
-# === ENV SETUP ===
-HF_TOKEN = os.getenv("HF_TOKEN")
+# === App Setup ===
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
-# === Load FLAN-T5-Large with cache ===
-@st.cache_resource(show_spinner="🔄 Loading FLAN-T5-Large (this may take a minute)...")
+# === ML FLOW ===
+mlflow.set_tracking_uri("http://3.145.180.106:5000")
+mlflow.set_experiment("Cincinnati Crime Chatbot")
+
+
+# === Load FLAN-T5-Base Model with error handling ===
+HF_TOKEN = st.secrets["HF_TOKEN"]
+
+@st.cache_resource(show_spinner="Loading FLAN-T5-Base model. This may take up to a minute.")
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
-    return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
+        model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
+        return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+    except Exception as e:
+        st.error(f"🚨 Error loading model: {e}")
+        raise e
 
 summarizer = load_model()
 
 # === Load & Clean Dataset ===
-@st.cache_data(show_spinner="📂 Fetching latest police reports...")
+@st.cache_data(show_spinner="Fetching latest police reports...")
 def load_data():
     path = hf_hub_download(
         repo_id="mlsystemsg1/cincinnati-crime-data",
         repo_type="dataset",
-        filename="calls_for_service_latest.csv",
-        token=HF_TOKEN
+        filename="calls_for_service_latest.csv"
     )
     df = pd.read_csv(path, low_memory=False)
     df['incident_type_desc'] = df['incident_type_desc'].fillna(df['incident_type_id'])
@@ -39,27 +47,26 @@ def load_data():
     for col in ['sna_neighborhood', 'cpd_neighborhood']:
         df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r'\s+', ' ', regex=True)
     df['neighborhood'] = df['cpd_neighborhood'].combine_first(df['sna_neighborhood'])
-    df = df.dropna(subset=['create_time_incident', 'neighborhood'])
-    df = df.sort_values(by="create_time_incident", ascending=False)
-    return df
+    return df.dropna(subset=['create_time_incident', 'neighborhood']).sort_values("create_time_incident", ascending=False)
 
-df_crime = load_data()
+df = load_data()
 
-# === Utilities ===
+# === Helpers ===
 def clean_text(text):
     if not isinstance(text, str) or not text.strip():
         return "Not Reported"
     text = text.upper()
     replacements = {
-        "ARR:": "Arrest made", "ADV:": "Advised", "NTR:": "Nothing to report", "GOA:": "Gone on arrival",
-        "CAN:": "Cancelled", "TC:": "Transferred call", "DIRPAT": "Directed Patrol", "MHC": "Mental Health Crisis",
-        "SOW:": "Sent on way", "INV:": "Investigated", "NRBURG": "False Alarm", "REPO": "Towed Vehicle"
+        "ARR:": "Arrest made", "ADV:": "Advised", "NTR:": "Nothing to report",
+        "GOA:": "Gone on arrival", "CAN:": "Cancelled", "TC:": "Transferred call",
+        "DIRPAT": "Directed Patrol", "MHC": "Mental Health Crisis", "SOW:": "Sent on way",
+        "INV:": "Investigated", "NRBURG": "False Alarm", "REPO": "Towed Vehicle"
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
     return text.strip().title()
 
-def filter_rows(question, df):
+def get_relevant_rows(question, df):
     q = question.lower()
     filtered = df.copy()
     now = pd.Timestamp.now()
@@ -99,13 +106,10 @@ def filter_rows(question, df):
 
     return filtered.sort_values("create_time_incident", ascending=False).head(25)
 
-def generate_answer(question, df):
-    rows = filter_rows(question, df)
-    if rows.empty:
-        return "🚫 No incidents found matching your question."
-
-    valid_rows, ignored_rows = [], []
-    for _, row in rows.iterrows():
+def answer_with_llm(question, df, model):
+    valid_rows = []
+    ignored_rows = []
+    for _, row in df.iterrows():
         disp = str(row.get('disposition_text', '')).upper()
         if any(bad in disp for bad in ['CAN:', 'CANCEL', 'TC:', 'NTR:', 'USED CLEAR BUTTON']):
             ignored_rows.append(row)
@@ -113,47 +117,52 @@ def generate_answer(question, df):
             valid_rows.append(row)
 
     if not valid_rows:
-        return f"⚠️ All {len(ignored_rows)} matched incidents were cancelled or administrative."
+        return f"⚠️ All {len(ignored_rows)} matched incidents were cancelled or administrative.", None
     if len(valid_rows) == 1:
         row = valid_rows[0]
-        return f"Only one valid incident was found:\n\n📅 {row['create_time_incident'].strftime('%b %d, %Y')}\n📍 {clean_text(row.get('neighborhood'))}\n📝 {clean_text(row.get('incident_type_desc'))}\n🔚 {clean_text(row.get('disposition_text'))}\n🚨 Priority: {row.get('priority', 'N/A')}"
+        return f"📅 {row['create_time_incident'].strftime('%b %d, %Y')}, 🏙️ {clean_text(row['neighborhood'])}, 📋 {clean_text(row['incident_type_desc'])}, 🔚 {clean_text(row['disposition_text'])}, 🚨 Priority: {row.get('priority', 'N/A')}", None
 
     context_lines = []
     incident_type_counts = Counter()
     for row in valid_rows:
-        context_lines.append(f"- Date: {row['create_time_incident'].strftime('%b %d, %Y')}, Incident: {clean_text(row.get('incident_type_desc'))}, Neighborhood: {clean_text(row.get('neighborhood'))}, Priority: {row.get('priority', 'N/A')}, Outcome: {clean_text(row.get('disposition_text'))}")
-        incident_type_counts[clean_text(row.get('incident_type_desc'))] += 1
+        context_lines.append(f"- {row['create_time_incident'].strftime('%b %d')}: {clean_text(row['incident_type_desc'])} in {clean_text(row['neighborhood'])}, priority {row.get('priority', 'N/A')}")
+        incident_type_counts[clean_text(row['incident_type_desc'])] += 1
 
-    context = "\n".join(context_lines)
     incident_summary = ", ".join(f"{c} {t.lower() + ('s' if c > 1 else '')}" for t, c in incident_type_counts.items())
-
+    context = "\n".join(context_lines)
     prompt = f"""
 Citizen asked: \"{question}\"
 Out of {len(valid_rows) + len(ignored_rows)} total incidents, {len(ignored_rows)} were excluded. The remaining {len(valid_rows)} included: {incident_summary}.
 {context}
 Summarize what happened in a helpful and human-friendly paragraph:
 """
-    return summarizer(prompt, max_length=300, truncation=True)[0]['generated_text']
+
+    with mlflow.start_run() as run:
+        mlflow.log_param("question", question)
+        mlflow.log_metric("num_valid_incidents", len(valid_rows))
+        response = model(prompt, max_length=300, truncation=True)[0]['generated_text']
+        mlflow.log_text(response, "summary.txt")
+        return response, run.info.run_id
 
 # === UI ===
-sample_questions = [
-    "What crimes happened in Over-the-Rhine last week?",
-    "Any arrests in Walnut Hills in March 2025?",
-    "Were there any shootings in Avondale this year?",
-    "Tell me about police activity in Westwood yesterday.",
-    "What kind of incidents happened in downtown Cincinnati in February 2024?"
-]
+question = st.text_input("Ask your question:").strip()
+if question:
+    with st.spinner("Analyzing..."):
+        filtered = get_relevant_rows(question, df)
 
-st.markdown("**📌 Try a suggested question:**")
-cols = st.columns(len(sample_questions))
-for i, q in enumerate(sample_questions):
-    if cols[i].button(q):
-        st.session_state["preset"] = q
+        with st.expander("🔍 Filtered Data Preview"):
+            st.dataframe(filtered[['create_time_incident', 'incident_type_id', 'cpd_neighborhood', 'priority']].head(10))
 
-question = st.text_input("Ask a question:", value=st.session_state.get("preset", ""))
+        response, run_id = answer_with_llm(question, filtered, summarizer)
+        st.success("Done!")
+        st.markdown("### 🤖 Response:")
+        st.write(response)
 
-if st.button("Submit"):
-    with st.spinner("🧠 Bot is thinking..."):
-        response = generate_answer(question, df_crime)
-        st.markdown("---")
-        st.markdown(f"### 📬 Response:\n{response}")
+        st.markdown("### 🗳️ Was this helpful?")
+        col1, col2 = st.columns(2)
+        if col1.button("👍 Yes"):
+            mlflow.set_tag("feedback", "thumbs_up")
+            st.success("Thanks for your feedback!")
+        if col2.button("👎 No"):
+            mlflow.set_tag("feedback", "thumbs_down")
+            st.warning("Thanks for letting us know!")
