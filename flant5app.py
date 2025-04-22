@@ -1,16 +1,11 @@
-# === STREAMLIT VERSION: CINCINNATI CRIME CHATBOT WITH FLAN-T5-LARGE ===
+# === STREAMLIT: CINCINNATI CRIME CHATBOT ===
 import pandas as pd
 import time
-import mlflow
 import re
-from collections import Counter
 import streamlit as st
+from collections import Counter
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
-from huggingface_hub import hf_hub_download, login
-import os
-
-# === Hugging Face Auth ===
-login(token=os.environ.get("HF_TOKEN"))
+from huggingface_hub import hf_hub_download
 
 # === Setup ===
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
@@ -18,9 +13,9 @@ st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
 # === Load FLAN-T5-Large Model ===
-st.write("Loading FLAN-T5-Large...")
-tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
-model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
+st.info("Loading FLAN-T5-Large model. Please wait... (this may take ~1min)")
+tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large", token=True)
+model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large", token=True)
 summarizer = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
 # === Load & Clean Dataset ===
@@ -44,16 +39,18 @@ def load_data():
 
 df_crime = load_data()
 
-# === Helper Functions ===
+# === Utilities ===
 def clean_text(text):
-    if not isinstance(text, str) or not text.strip(): return "Not Reported"
+    if not isinstance(text, str) or not text.strip():
+        return "Not Reported"
     text = text.upper()
     replacements = {
         "ARR:": "Arrest made", "ADV:": "Advised", "NTR:": "Nothing to report", "GOA:": "Gone on arrival",
         "CAN:": "Cancelled", "TC:": "Transferred call", "DIRPAT": "Directed Patrol", "MHC": "Mental Health Crisis",
         "SOW:": "Sent on way", "INV:": "Investigated", "NRBURG": "False Alarm", "REPO": "Towed Vehicle"
     }
-    for k, v in replacements.items(): text = text.replace(k, v)
+    for k, v in replacements.items():
+        text = text.replace(k, v)
     return text.strip().title()
 
 def filter_rows(question, df):
@@ -99,7 +96,7 @@ def filter_rows(question, df):
 def generate_answer(question, df):
     rows = filter_rows(question, df)
     if rows.empty:
-        return "\ud83d\udeab No incidents found matching your question."
+        return "🚫 No incidents found matching your question."
 
     valid_rows, ignored_rows = [], []
     for _, row in rows.iterrows():
@@ -110,10 +107,10 @@ def generate_answer(question, df):
             valid_rows.append(row)
 
     if not valid_rows:
-        return f"\u26a0\ufe0f All {len(ignored_rows)} matched incidents were cancelled or administrative."
+        return f"⚠️ All {len(ignored_rows)} matched incidents were cancelled or administrative."
     if len(valid_rows) == 1:
         row = valid_rows[0]
-        return f"Only one valid incident was found:\n\n\ud83d\udcc5 {row['create_time_incident'].strftime('%b %d, %Y')}\n\ud83d\udccd {clean_text(row.get('neighborhood'))}\n\ud83d\udcdd {clean_text(row.get('incident_type_desc'))}\n\ud83d\uded9 Outcome: {clean_text(row.get('disposition_text'))}\n\ud83d\udea8 Priority: {row.get('priority', 'N/A')}"
+        return f"Only one valid incident was found:\n\n📅 {row['create_time_incident'].strftime('%b %d, %Y')}\n📍 {clean_text(row.get('neighborhood'))}\n📝 {clean_text(row.get('incident_type_desc'))}\n🔚 {clean_text(row.get('disposition_text'))}\n🚨 Priority: {row.get('priority', 'N/A')}"
 
     context_lines = []
     incident_type_counts = Counter()
@@ -133,7 +130,7 @@ Summarize what happened in a helpful and human-friendly paragraph:
 
     return summarizer(prompt, max_length=300, truncation=True)[0]['generated_text']
 
-# === Suggested Questions ===
+# === UI ===
 sample_questions = [
     "What crimes happened in Over-the-Rhine last week?",
     "Any arrests in Walnut Hills in March 2025?",
@@ -142,7 +139,7 @@ sample_questions = [
     "What kind of incidents happened in downtown Cincinnati in February 2024?"
 ]
 
-st.markdown("**\ud83d\udccc Try a suggested question:**")
+st.markdown("**📌 Try a suggested question:**")
 cols = st.columns(len(sample_questions))
 for i, q in enumerate(sample_questions):
     if cols[i].button(q):
@@ -151,7 +148,7 @@ for i, q in enumerate(sample_questions):
 question = st.text_input("Ask a question:", value=st.session_state.get("preset", ""))
 
 if st.button("Submit"):
-    with st.spinner("\ud83e\udde0 Bot is thinking..."):
+    with st.spinner("🧠 Bot is thinking..."):
         response = generate_answer(question, df_crime)
         st.markdown("---")
-        st.markdown(f"### \ud83d\udcec Response:\n{response}")
+        st.markdown(f"### 📬 Response:\n{response}")
