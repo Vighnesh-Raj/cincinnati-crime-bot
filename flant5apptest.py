@@ -3,9 +3,13 @@ import pandas as pd
 import re
 import mlflow
 import streamlit as st
+import torch
 from collections import Counter
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
+
+# === DEVICE SETUP ===
+torch_device = torch.device("cpu")
 
 # === App Setup ===
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
@@ -24,6 +28,7 @@ def load_model():
     return tokenizer, model
 
 tokenizer, model = load_model()
+model.to(torch_device)
 
 # === Load & Clean Dataset ===
 @st.cache_data(show_spinner="Fetching latest police reports...")
@@ -114,7 +119,7 @@ def answer_with_llm(question, df, model):
         return f"⚠️ All {len(ignored_rows)} matched incidents were cancelled or administrative.", None
     if len(valid_rows) == 1:
         row = valid_rows[0]
-        return f"🗕️ {row['create_time_incident'].strftime('%b %d, %Y')}, 🏩 {clean_text(row['neighborhood'])}, 📋 {clean_text(row['incident_type_desc'])}, 🔚 {clean_text(row['disposition_text'])}, 🚨 Priority: {row.get('priority', 'N/A')}", None
+        return f"📅 {row['create_time_incident'].strftime('%b %d, %Y')}, 🏩 {clean_text(row['neighborhood'])}, 📋 {clean_text(row['incident_type_desc'])}, 🔚 {clean_text(row['disposition_text'])}, 🚨 Priority: {row.get('priority', 'N/A')}", None
 
     context_lines = []
     incident_type_counts = Counter()
@@ -135,7 +140,7 @@ Summarize what happened in a helpful and human-friendly paragraph:
         mlflow.log_param("question", question)
         mlflow.log_metric("num_valid_incidents", len(valid_rows))
 
-        input_ids = tokenizer(prompt, return_tensors="pt", truncation=True).input_ids
+        input_ids = tokenizer(prompt, return_tensors="pt", truncation=True).input_ids.to(torch_device)
         output = model.generate(input_ids, max_length=300)
         response = tokenizer.decode(output[0], skip_special_tokens=True)
 
@@ -151,16 +156,19 @@ if question:
         with st.expander("🔍 Filtered Data Preview"):
             st.dataframe(filtered[['create_time_incident', 'incident_type_id', 'cpd_neighborhood', 'priority']].head(10))
 
-        response, run_id = answer_with_llm(question, filtered, model)
-        st.success("Done!")
-        st.markdown("### 🤖 Response:")
-        st.write(response)
+        try:
+            response, run_id = answer_with_llm(question, filtered, model)
+            st.success("Done!")
+            st.markdown("### 🤖 Response:")
+            st.write(response)
 
-        st.markdown("### 🗳️ Was this helpful?")
-        col1, col2 = st.columns(2)
-        if col1.button("👍 Yes"):
-            mlflow.set_tag("feedback", "thumbs_up")
-            st.success("Thanks for your feedback!")
-        if col2.button("👎 No"):
-            mlflow.set_tag("feedback", "thumbs_down")
-            st.warning("Thanks for letting us know!")
+            st.markdown("### 🗳️ Was this helpful?")
+            col1, col2 = st.columns(2)
+            if col1.button("👍 Yes"):
+                mlflow.set_tag("feedback", "thumbs_up")
+                st.success("Thanks for your feedback!")
+            if col2.button("👎 No"):
+                mlflow.set_tag("feedback", "thumbs_down")
+                st.warning("Thanks for letting us know!")
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
