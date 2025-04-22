@@ -6,25 +6,33 @@ import streamlit as st
 from collections import Counter
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
+import os
 
 # === Setup ===
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
-# === Load FLAN-T5-Large Model ===
-st.info("Loading FLAN-T5-Large model. Please wait... (this may take ~1min)")
-tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large", token=True)
-model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large", token=True)
-summarizer = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+# === HF TOKEN from Streamlit Secrets ===
+HF_TOKEN = os.getenv("HF_TOKEN")
+
+# === Cache the model for reuse after cold start ===
+@st.cache_resource(show_spinner="PLease wait while we load the FLAN-T5-Large model...")
+def load_summarizer():
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large", use_auth_token=HF_TOKEN)
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large", use_auth_token=HF_TOKEN)
+    return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+
+summarizer = load_summarizer()
 
 # === Load & Clean Dataset ===
-@st.cache_data(show_spinner="Fetching latest police reports...")
+@st.cache_data(show_spinner="Loading Cincinnati police data...")
 def load_data():
     path = hf_hub_download(
         repo_id="mlsystemsg1/cincinnati-crime-data",
         repo_type="dataset",
-        filename="calls_for_service_latest.csv"
+        filename="calls_for_service_latest.csv",
+        use_auth_token=HF_TOKEN
     )
     df = pd.read_csv(path, low_memory=False)
     df['incident_type_desc'] = df['incident_type_desc'].fillna(df['incident_type_id'])
