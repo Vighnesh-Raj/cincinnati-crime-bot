@@ -8,7 +8,7 @@ from collections import Counter
 from huggingface_hub import hf_hub_download
 
 # === CONFIG ===
-BACKEND_URL = "https://96dd-35-229-67-215.ngrok-free.app/generate"
+BACKEND_URL = "https://96dd-35-229-67-215.ngrok-free.app/generate"  # <-- Your Colab URL
 
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
@@ -36,7 +36,7 @@ def load_data():
 
 df = load_data()
 
-# === Utils ===
+# === Helpers ===
 def clean_text(text):
     if not isinstance(text, str) or not text.strip():
         return "Not Reported"
@@ -91,16 +91,16 @@ def get_relevant_rows(question, df):
 
     return filtered.sort_values("create_time_incident", ascending=False).head(25)
 
-# === Call Remote LLM ===
+# === Remote FLAN-T5 via Colab ===
 def call_colab_llm(prompt: str):
     try:
-        res = requests.post(BACKEND_URL, json={"question": prompt}, timeout=20)
+        res = requests.post(BACKEND_URL, json={"question": prompt}, timeout=30)
         res.raise_for_status()
         return res.json()["response"]
     except Exception as e:
         return f"❌ Error calling LLM backend: {str(e)}"
 
-# === Final Inference Logic ===
+# === Final Answer Logic ===
 def answer_with_llm(question, df):
     valid_rows = []
     ignored_rows = []
