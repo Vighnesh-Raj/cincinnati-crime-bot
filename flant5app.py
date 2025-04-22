@@ -3,8 +3,8 @@ import pandas as pd
 import re
 import mlflow
 import streamlit as st
+import requests
 from collections import Counter
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import hf_hub_download
 
 # === App Setup ===
@@ -15,17 +15,6 @@ st.markdown("Ask about recent police activity in your neighborhood.")
 # === MLflow Setup ===
 mlflow.set_tracking_uri("http://3.145.180.106:5000")
 mlflow.set_experiment("Cincinnati Crime Chatbot")
-
-# === Load FLAN-T5-Base Model ===
-HF_TOKEN = st.secrets["HF_TOKEN"]
-
-@st.cache_resource
-def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", token=HF_TOKEN)
-    return tokenizer, model
-
-tokenizer, model = load_model()
 
 # === Load & Clean Dataset ===
 @st.cache_data(show_spinner="Fetching latest police reports...")
@@ -101,8 +90,10 @@ def get_relevant_rows(question, df):
 
     return filtered.sort_values("create_time_incident", ascending=False).head(25)
 
-# === Inference Function ===
-def answer_with_llm(question, df, model):
+# === Inference using FastAPI + Colab ===
+COLAB_BACKEND = "https://96dd-35-229-67-215.ngrok-free.app/generate"  # Update this each session
+
+def answer_with_llm(question, df):
     valid_rows = []
     ignored_rows = []
     for _, row in df.iterrows():
@@ -137,12 +128,16 @@ Summarize what happened in a helpful and human-friendly paragraph:
         mlflow.log_param("question", question)
         mlflow.log_metric("num_valid_incidents", len(valid_rows))
 
-        input_ids = tokenizer(prompt, return_tensors="pt", truncation=True).input_ids
-        output = model.generate(input_ids, max_length=300)
-        response = tokenizer.decode(output[0], skip_special_tokens=True)
-
-        mlflow.log_text(response, "summary.txt")
-        return response, run.info.run_id
+        try:
+            response = requests.post(COLAB_BACKEND, json={"question": prompt})
+            if response.status_code == 200:
+                answer = response.json()["response"]
+                mlflow.log_text(answer, "summary.txt")
+                return answer, run.info.run_id
+            else:
+                return f"❌ Error from Colab API: {response.status_code}", None
+        except Exception as e:
+            return f"🚨 API call failed: {e}", None
 
 # === UI ===
 question = st.text_input("Ask your question:").strip()
@@ -153,7 +148,7 @@ if question:
         with st.expander("🔍 Filtered Data Preview"):
             st.dataframe(filtered[['create_time_incident', 'incident_type_id', 'cpd_neighborhood', 'priority']].head(10))
 
-        response, run_id = answer_with_llm(question, filtered, model)
+        response, run_id = answer_with_llm(question, filtered)
         st.success("Done!")
         st.markdown("### 🤖 Response:")
         st.write(response)
