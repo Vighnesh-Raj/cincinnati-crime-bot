@@ -4,3 +4,4 @@ transformers
 huggingface_hub
 sodapy
 mlflow
+transformers[torch]
