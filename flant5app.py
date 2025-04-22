@@ -7,17 +7,18 @@ import requests
 from collections import Counter
 from huggingface_hub import hf_hub_download
 
-# === App Setup ===
+# === CONFIG ===
+BACKEND_URL = "https://96dd-35-229-67-215.ngrok-free.app/generate"
+
 st.set_page_config(page_title="Cincinnati Crime Chatbot", page_icon="🚓")
 st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
-# === MLflow Setup ===
 mlflow.set_tracking_uri("http://3.145.180.106:5000")
 mlflow.set_experiment("Cincinnati Crime Chatbot")
 
-# === Load & Clean Dataset ===
-@st.cache_data(show_spinner="Fetching latest police reports...")
+# === Load Dataset ===
+@st.cache_data(show_spinner="Loading police reports...")
 def load_data():
     path = hf_hub_download(
         repo_id="mlsystemsg1/cincinnati-crime-data",
@@ -35,7 +36,7 @@ def load_data():
 
 df = load_data()
 
-# === Helpers ===
+# === Utils ===
 def clean_text(text):
     if not isinstance(text, str) or not text.strip():
         return "Not Reported"
@@ -90,9 +91,16 @@ def get_relevant_rows(question, df):
 
     return filtered.sort_values("create_time_incident", ascending=False).head(25)
 
-# === Inference using FastAPI + Colab ===
-COLAB_BACKEND = "https://96dd-35-229-67-215.ngrok-free.app/generate"  # Update this each session
+# === Call Remote LLM ===
+def call_colab_llm(prompt: str):
+    try:
+        res = requests.post(BACKEND_URL, json={"question": prompt}, timeout=20)
+        res.raise_for_status()
+        return res.json()["response"]
+    except Exception as e:
+        return f"❌ Error calling LLM backend: {str(e)}"
 
+# === Final Inference Logic ===
 def answer_with_llm(question, df):
     valid_rows = []
     ignored_rows = []
@@ -127,17 +135,9 @@ Summarize what happened in a helpful and human-friendly paragraph:
     with mlflow.start_run() as run:
         mlflow.log_param("question", question)
         mlflow.log_metric("num_valid_incidents", len(valid_rows))
-
-        try:
-            response = requests.post(COLAB_BACKEND, json={"question": prompt})
-            if response.status_code == 200:
-                answer = response.json()["response"]
-                mlflow.log_text(answer, "summary.txt")
-                return answer, run.info.run_id
-            else:
-                return f"❌ Error from Colab API: {response.status_code}", None
-        except Exception as e:
-            return f"🚨 API call failed: {e}", None
+        response = call_colab_llm(prompt)
+        mlflow.log_text(response, "summary.txt")
+        return response, run.info.run_id
 
 # === UI ===
 question = st.text_input("Ask your question:").strip()
