@@ -20,19 +20,25 @@ mlflow.set_experiment("Cincinnati Crime Chatbot")
 # === Load Dataset ===
 @st.cache_data(show_spinner="Loading police reports...")
 def load_data():
-    path = hf_hub_download(
-        repo_id="mlsystemsg1/cincinnati-crime-data",
-        repo_type="dataset",
-        filename="calls_for_service_latest.csv"
-    )
-    df = pd.read_csv(path, low_memory=False)
-    df['incident_type_desc'] = df['incident_type_desc'].fillna(df['incident_type_id'])
-    df['priority'] = pd.to_numeric(df['priority'], errors='coerce')
-    df['create_time_incident'] = pd.to_datetime(df['create_time_incident'], errors='coerce')
-    for col in ['sna_neighborhood', 'cpd_neighborhood']:
-        df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r'\s+', ' ', regex=True)
-    df['neighborhood'] = df['cpd_neighborhood'].combine_first(df['sna_neighborhood'])
-    return df.dropna(subset=['create_time_incident', 'neighborhood']).sort_values("create_time_incident", ascending=False)
+    st.write("📊 Loading dataset...")
+    try:
+        path = hf_hub_download(
+            repo_id="mlsystemsg1/cincinnati-crime-data",
+            repo_type="dataset",
+            filename="calls_for_service_latest.csv"
+        )
+        df = pd.read_csv(path, low_memory=False)
+        df['incident_type_desc'] = df['incident_type_desc'].fillna(df['incident_type_id'])
+        df['priority'] = pd.to_numeric(df['priority'], errors='coerce')
+        df['create_time_incident'] = pd.to_datetime(df['create_time_incident'], errors='coerce')
+        for col in ['sna_neighborhood', 'cpd_neighborhood']:
+            df[col] = df[col].astype(str).str.strip().str.upper().str.replace(r'\s+', ' ', regex=True)
+        df['neighborhood'] = df['cpd_neighborhood'].combine_first(df['sna_neighborhood'])
+        st.write("✅ Dataset loaded")
+        return df.dropna(subset=['create_time_incident', 'neighborhood']).sort_values("create_time_incident", ascending=False)
+    except Exception as e:
+        st.error(f"❌ Failed to load dataset: {e}")
+        raise
 
 df = load_data()
 
@@ -52,6 +58,7 @@ def clean_text(text):
     return text.strip().title()
 
 def get_relevant_rows(question, df):
+    st.write("🔍 Filtering relevant incidents...")
     q = question.lower()
     filtered = df.copy()
     now = pd.Timestamp.now()
@@ -89,16 +96,19 @@ def get_relevant_rows(question, df):
             ]
             break
 
+    st.write(f"📄 Filtered to {len(filtered)} rows")
     return filtered.sort_values("create_time_incident", ascending=False).head(25)
 
 # === Remote FLAN-T5 via Colab ===
 def call_colab_llm(prompt: str):
+    st.write("📡 Calling LLM backend...")
     try:
         res = requests.post(BACKEND_URL, json={"question": prompt}, timeout=30)
         res.raise_for_status()
         return res.json()["response"]
     except Exception as e:
-        return f"❌ Error calling LLM backend: {str(e)}"
+        st.error(f"❌ Error calling LLM backend: {str(e)}")
+        return f"❌ LLM backend error: {str(e)}"
 
 # === Final Answer Logic ===
 def answer_with_llm(question, df):
@@ -132,6 +142,9 @@ Out of {len(valid_rows) + len(ignored_rows)} total incidents, {len(ignored_rows)
 Summarize what happened in a helpful and human-friendly paragraph:
 """.strip()
 
+    st.write("🧠 Generating summary...")
+    st.code(prompt)
+
     with mlflow.start_run() as run:
         mlflow.log_param("question", question)
         mlflow.log_metric("num_valid_incidents", len(valid_rows))
@@ -143,21 +156,25 @@ Summarize what happened in a helpful and human-friendly paragraph:
 question = st.text_input("Ask your question:").strip()
 if question:
     with st.spinner("Analyzing..."):
-        filtered = get_relevant_rows(question, df)
+        try:
+            filtered = get_relevant_rows(question, df)
 
-        with st.expander("🔍 Filtered Data Preview"):
-            st.dataframe(filtered[['create_time_incident', 'incident_type_id', 'cpd_neighborhood', 'priority']].head(10))
+            with st.expander("🔍 Filtered Data Preview"):
+                st.dataframe(filtered[['create_time_incident', 'incident_type_id', 'cpd_neighborhood', 'priority']].head(10))
 
-        response, run_id = answer_with_llm(question, filtered)
-        st.success("Done!")
-        st.markdown("### 🤖 Response:")
-        st.write(response)
+            response, run_id = answer_with_llm(question, filtered)
+            st.success("Done!")
+            st.markdown("### 🤖 Response:")
+            st.write(response)
 
-        st.markdown("### 🗳️ Was this helpful?")
-        col1, col2 = st.columns(2)
-        if col1.button("👍 Yes"):
-            mlflow.set_tag("feedback", "thumbs_up")
-            st.success("Thanks for your feedback!")
-        if col2.button("👎 No"):
-            mlflow.set_tag("feedback", "thumbs_down")
-            st.warning("Thanks for letting us know!")
+            st.markdown("### 🗳️ Was this helpful?")
+            col1, col2 = st.columns(2)
+            if col1.button("👍 Yes"):
+                mlflow.set_tag("feedback", "thumbs_up")
+                st.success("Thanks for your feedback!")
+            if col2.button("👎 No"):
+                mlflow.set_tag("feedback", "thumbs_down")
+                st.warning("Thanks for letting us know!")
+
+        except Exception as e:
+            st.error(f"Unexpected error: {e}")
