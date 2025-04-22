@@ -18,7 +18,7 @@ st.title("🚔 Cincinnati Crime Chatbot")
 st.markdown("Ask about recent police activity in your neighborhood.")
 
 # === Load FLAN-T5-Large Model ===
-st.text("\ud83d\udce6 Loading FLAN-T5-Large...")
+st.write("Loading FLAN-T5-Large...")
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
 summarizer = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
