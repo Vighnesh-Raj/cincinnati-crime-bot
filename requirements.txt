@@ -3,3 +3,4 @@ pandas
 transformers
 huggingface_hub
 sodapy
+mlflow
