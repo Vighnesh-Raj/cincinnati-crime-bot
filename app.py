@@ -37,7 +37,7 @@ def load_crime_data():
 
 @st.cache_resource
 def load_model():
-    return pipeline("text2text-generation", model="google/flan-t5-base")
+    return pipeline("text2text-generation", model="google/flan-t5-small")
 
 OFFENSE_GROUPS = {
     "robbery": ["ROBBERY PERSONAL (JO)(W)", "ROBBERY PERSONAL (IP)", "ROBBERY BUSINESS (NIP)"],
